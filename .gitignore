@@ -1,0 +1,15 @@
+data/
+data.zip
+*.DS_store
+
+__MACOSX/
+
+run.bash
+
+*.pyc
+**/__pycache__
+
+checkpoints/
+retriever_model/
+
+log_file.txt
