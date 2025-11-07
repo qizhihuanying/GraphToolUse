@@ -143,10 +143,7 @@ DEFAULT_LOG_DIR = REPO_ROOT / "log"
 
 
 class DeviceNameFilter(logging.Filter):
-    _BLOCKED_MSGS = [
-        "Use pytorch device_name",
-        "No sentence-transformers model found with name",
-    ]
+    _BLOCKED_MSGS = ["Use pytorch device_name"]
 
     def filter(self, record):
         message = record.getMessage()

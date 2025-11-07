@@ -6,14 +6,14 @@ export DATA_DIR="data/retrieval/G3/"
 export MODEL_NAME="bert-base-uncased"
 export OUTPUT_PATH="retriever_model"
 export GPU_ID="7"
-export LOG_PATH="log/G3"
+export LOG_PATH="log/BERT-G3"
 
 python src/main.py \
     --data_path $DATA_DIR \
     --model_name_or_path $MODEL_NAME \
     --output_path $OUTPUT_PATH \
     --num_epochs 0 \
-    --train_batch_size 32 \
+    --batch_size 32 \
     --learning_rate 2e-5 \
     --warmup_steps 500 \
     --max_seq_length 256 \

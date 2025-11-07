@@ -5,15 +5,15 @@ export HF_ENDPOINT=https://hf-mirror.com
 export DATA_DIR="data/retrieval/G2/"
 export MODEL_NAME="bert-base-uncased"
 export OUTPUT_PATH="retriever_model"
-export GPU_ID="6"
-export LOG_PATH="log/G2"
+export GPU_ID="5"
+export LOG_PATH="log/BERT-G2"
 
 python src/main.py \
     --data_path $DATA_DIR \
     --model_name_or_path $MODEL_NAME \
     --output_path $OUTPUT_PATH \
     --num_epochs 5 \
-    --train_batch_size 32 \
+    --batch_size 32 \
     --learning_rate 2e-5 \
     --warmup_steps 500 \
     --max_seq_length 256 \

@@ -204,7 +204,7 @@ python src/main.py \
     --data_path data/retrieval/G1/ \
     --model_type qwen3 \
     --model_name_or_path Qwen/Qwen3-0.6B \
-    --train_batch_size 8 \
+    --batch_size 8 \
     --learning_rate 2e-5 \
     --num_epochs 0 \
     --torch_dtype auto \

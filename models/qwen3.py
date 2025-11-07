@@ -31,7 +31,7 @@ class Qwen3Retriever(RetrievalModel):
         self.model = AutoModel.from_pretrained(
             model_name_or_path,
             trust_remote_code=True,
-            torch_dtype=dtype,
+            dtype=dtype,
         )
         self.model.to(self.device)
         self.model.eval()

@@ -28,7 +28,7 @@ def build_arg_parser():
                         type=str, required=True, help="Base model name or path.")
     parser.add_argument("--output_path", type=str, required=True, help="Where to save checkpoints.")
     parser.add_argument("--num_epochs", type=int, default=5, help="Training epochs.")
-    parser.add_argument("--train_batch_size", type=int, default=32, help="Training batch size.")
+    parser.add_argument("--batch_size", type=int, default=32, help="Training/evaluation batch size.")
     parser.add_argument("--learning_rate", type=float, default=2e-5, help="Learning rate.")
     parser.add_argument("--warmup_steps", type=int, default=500, help="Warmup steps.")
     parser.add_argument("--max_seq_length", type=int, default=256, help="Max sequence length.")
@@ -43,7 +43,7 @@ def build_arg_parser():
 
 def build_log_file_name(args) -> str:
     lr_str = f"{args.learning_rate:g}"
-    return f"lr={lr_str}+bs={args.train_batch_size}+epoch={args.num_epochs}"
+    return f"lr={lr_str}+bs={args.batch_size}+epoch={args.num_epochs}"
 
 
 def main():
@@ -81,7 +81,7 @@ def main():
         dataloader = DataLoader(
             train_samples,
             shuffle=True,
-            batch_size=args.train_batch_size,
+            batch_size=args.batch_size,
             pin_memory=torch.cuda.is_available(),
         )
 
@@ -89,7 +89,7 @@ def main():
         test_queries,
         ir_corpus,
         ir_relevant_docs,
-        batch_size=args.train_batch_size,
+        batch_size=args.batch_size,
     )
 
     tensorboard_dir = output_root / "tensorboard" / Path(args.model_name_or_path).name.replace("/", "_")
