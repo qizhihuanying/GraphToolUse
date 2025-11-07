@@ -8,9 +8,9 @@ export OUTPUT_PATH="retriever_model"
 export GPU_ID="7"
 export LOG_PATH="log/G3"
 
-python toolbench/retrieval/train.py \
+python src/main.py \
     --data_path $DATA_DIR \
-    --model_name $MODEL_NAME \
+    --model_name_or_path $MODEL_NAME \
     --output_path $OUTPUT_PATH \
     --num_epochs 5 \
     --train_batch_size 32 \

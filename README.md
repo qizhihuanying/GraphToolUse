@@ -175,7 +175,7 @@ unzip data.zip
 - Data preprocessing:
 ```bash
 export PYTHONPATH=./
-python preprocess/preprocess_retriever_data.py \
+python src/preprocess_data.py \
     --query_file data/instruction/G1_query.json \
     --index_file data/test_query_ids/G1_instruction_test_query_ids.json \
     --dataset_name G1 \
@@ -184,10 +184,10 @@ python preprocess/preprocess_retriever_data.py \
 - Then run the following command to train the tool retriever:
 ```bash
 export PYTHONPATH=./
-python toolbench/retrieval/train.py \
+python src/main.py \
     --data_path data/retrieval/G1/ \
-    --model_name bert-base-uncased \
-    --output_path retrieval_model \
+    --model_name_or_path bert-base-uncased \
+    --output_path retriever_model \
     --num_epochs 5 \
     --train_batch_size 32 \
     --learning_rate 2e-5 \
@@ -195,11 +195,29 @@ python toolbench/retrieval/train.py \
     --max_seq_length 256
 ```
 
+### Evaluating baselines
+Use the unified evaluation entry to benchmark trained checkpoints or inference-only baselines such as Qwen:
+
+```bash
+export PYTHONPATH=./
+python src/main.py \
+    --data_path data/retrieval/G1/ \
+    --model_type qwen3 \
+    --model_name_or_path Qwen/Qwen3-0.6B \
+    --train_batch_size 8 \
+    --learning_rate 2e-5 \
+    --num_epochs 0 \
+    --torch_dtype auto \
+    --log_path log/eval/Qwen3 \
+    --results_path results/qwen3_G1.json \
+    --show_progress_bar
+```
+
 ### Training ToolLLaMA
 - Data preprocessing, for G1_answer as an example:
 ```bash
 export PYTHONPATH=./
-python preprocess/preprocess_toolllama_data.py \
+python src/preprocess_toolllama_data.py \
     --tool_data_dir data/answer/G1_answer \
     --method DFS_woFilter_w2 \
     --output_file data/answer/toolllama_G1_dfs.json

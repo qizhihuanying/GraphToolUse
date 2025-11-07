@@ -1,9 +1,14 @@
 import json
+import logging
 import re
+from datetime import datetime
+from pathlib import Path
+from functools import partial
+
 import torch
 import transformers
 import transformers.models.llama.modeling_llama
-from functools import partial
+from sentence_transformers import LoggingHandler
 
 
 def process_system_message(system_message, functions):
@@ -129,4 +134,68 @@ def process_retrieval_ducoment(documents_df):
         ', optional_params: ' + json.dumps(doc.get('optional_parameters', '')) + \
         ', return_schema: ' + json.dumps(doc.get('template_response', ''))] = doc['category_name'] + '\t' + doc['tool_name'] + '\t' + doc['api_name']
     return ir_corpus, corpus2tool
+
+
+# Logging helpers
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_LOG_DIR = REPO_ROOT / "log"
+
+
+class DeviceNameFilter(logging.Filter):
+    _BLOCKED_MSGS = [
+        "Use pytorch device_name",
+        "No sentence-transformers model found with name",
+    ]
+
+    def filter(self, record):
+        message = record.getMessage()
+        return not any(block in message for block in self._BLOCKED_MSGS)
+
+
+def resolve_log_directory(log_dir: str | Path | None) -> Path:
+    if log_dir:
+        path = Path(log_dir).expanduser()
+        if not path.is_absolute():
+            path = (REPO_ROOT / path).resolve()
+    else:
+        path = DEFAULT_LOG_DIR
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def prepare_log_file(file_name: str, params: dict, log_dir: str | Path | None = None) -> Path:
+    log_directory = resolve_log_directory(log_dir)
+    log_file_path = log_directory / file_name
+    separator = "=" * 80
+    needs_newline = log_file_path.exists() and log_file_path.stat().st_size > 0
+    with log_file_path.open("a", encoding="utf-8") as f:
+        if needs_newline:
+            f.write("\n")
+        f.write(f"{separator}\nRun started at {datetime.now().isoformat()}\n")
+        if params:
+            f.write(json.dumps(params, ensure_ascii=False, sort_keys=True) + "\n")
+    return log_file_path
+
+
+def configure_logging(log_file_path: Path, extra_filters=None):
+    file_handler = logging.FileHandler(log_file_path, mode="a", encoding="utf-8")
+    formatter = logging.Formatter("%(asctime)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    file_handler.setFormatter(formatter)
+
+    console_handler = LoggingHandler()
+    console_handler.setFormatter(formatter)
+
+    handlers = [console_handler, file_handler]
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    root_logger.setLevel(logging.INFO)
+    for handler in handlers:
+        root_logger.addHandler(handler)
+
+    if extra_filters:
+        for handler in handlers:
+            for filt in extra_filters:
+                handler.addFilter(filt)
     

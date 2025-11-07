@@ -12,7 +12,7 @@ for DATASET in "${DATASETS[@]}"; do
     OUTPUT_DIR="data/retrieval/${DATASET}"
 
     echo "Preprocessing retriever data for ${DATASET}..."
-    python preprocess/preprocess_retriever_data.py \
+    python src/preprocess_data.py \
         --query_file "${QUERY_FILE}" \
         --index_file "${INDEX_FILE}" \
         --dataset_name "${DATASET}" \

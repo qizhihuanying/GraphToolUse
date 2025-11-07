@@ -173,7 +173,7 @@ unzip data.zip
 - 数据预处理:
 ```bash
 export PYTHONPATH=./
-python preprocess/preprocess_retriever_data.py \
+python src/preprocess_data.py \
     --query_file data/instruction/G1_query.json \
     --index_file data/test_query_ids/G1_instruction_test_query_ids.json \
     --dataset_name G1 \
@@ -182,10 +182,10 @@ python preprocess/preprocess_retriever_data.py \
 - 使用以下命令训练Retriever:
 ```bash
 export PYTHONPATH=./
-python toolbench/retrieval/train.py \
+python src/main.py \
     --data_path data/retrieval/G1/ \
-    --model_name bert-base-uncased \
-    --output_path retrieval_model \
+    --model_name_or_path bert-base-uncased \
+    --output_path retriever_model \
     --num_epochs 5 \
     --train_batch_size 32 \
     --learning_rate 2e-5 \
@@ -193,11 +193,29 @@ python toolbench/retrieval/train.py \
     --max_seq_length 256
 ```
 
+### 评测 Baseline
+使用统一的评测入口即可对训练后的 checkpoint 或仅推理的 baseline（例如 Qwen3-0.6B）进行评测：
+
+```bash
+export PYTHONPATH=./
+python src/main.py \
+    --data_path data/retrieval/G1/ \
+    --model_type qwen3 \
+    --model_name_or_path Qwen/Qwen3-0.6B \
+    --train_batch_size 8 \
+    --learning_rate 2e-5 \
+    --num_epochs 0 \
+    --torch_dtype auto \
+    --log_path log/eval/Qwen3 \
+    --results_path results/qwen3_G1.json \
+    --show_progress_bar
+```
+
 ### 训练ToolLLaMA
 - 数据预处理（G1_answer为例子）:
 ```bash
 export PYTHONPATH=./
-python preprocess/preprocess_toolllama_data.py \
+python src/preprocess_toolllama_data.py \
     --tool_data_dir data/answer/G1_answer \
     --method DFS_woFilter_w2 \
     --output_file data/answer/toolllama_G1_dfs.json
@@ -238,7 +256,7 @@ torchrun --nproc_per_node=2 --master_port=20001 toolbench/train/train_mem.py \
 您也可以用以下命令用您自己的方式去预处理并划分数据:
 ```bash
 export PYTHONPATH=./
-python preprocess/preprocess_toolllama_data.py \
+python src/preprocess_toolllama_data.py \
     --tool_data_dir data/answer/G1_answer \
     --method DFS_woFilter_w2 \
     --output_file data/answer/toolllama_G1_dfs.json

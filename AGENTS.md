@@ -1,9 +1,10 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `toolbench/`: Core Python packages for retrieval; `retrieval/train.py` orchestrates SentenceTransformer fine-tuning and `api_evaluator.py` scores runs.
-- `scripts/`: Bash wrappers such as `train_retriever.sh` and `preprocess_retriever_data.sh`; keep them executable and parameterize via environment variables.
-- `preprocess/`: Data shaping utilities that create corpus/query TSVs before training.
+- `src/`: Core Python packages for retrieval; `main.py` is the unified CLI, `train.py` hosts Trainer/APIEvaluator, `preprocess_data.py` and `preprocess_toolllama_data.py` handle data prep, `inference_example.py`用于快速抽查。
+- `models/`: Retrieval model implementations (`base.py`, `bert_sentence_transformer.py`, `qwen3.py`, etc.).
+- `scripts/`: Bash wrappers such as `train_retriever.sh`, `eval_qwen3.sh`, and preprocessing helpers; keep them executable and parameterize via environment variables.
+- `src/preprocess_*.py`: Data shaping utilities (e.g., retriever/toolllama preprocessing) that create corpus/query TSVs before training.
 - `data/`: Local datasets (`instruction/`, `retrieval/`, etc.); keep large raw assets out of commits and document any external download steps.
 - `retriever_model/` and `checkpoints/`: Generated artifacts; prune stale runs and avoid tracking them in version control.
 
@@ -11,7 +12,8 @@
 - `pip install -r requirements.txt`: Install Python ≥3.9 dependencies; run inside a virtualenv or Conda environment.
 - `bash scripts/preprocess_retriever_data.sh`: Regenerate `data/retrieval/<split>` corpora; rerun when queries or indices change.
 - `bash scripts/train_retriever.sh`: Train the retriever with the configured `GPU_ID`, emitting timestamped folders under `retriever_model/`.
-- `python toolbench/retrieval/inference_example.py <model_dir> data/retrieval/G3`: Spot-check retrieval quality and produce `top5_results_with_matches.json`.
+- `python src/main.py ... --num_epochs 5`: Train retriever; set `--num_epochs 0` to run evaluation-only baselines (e.g., Qwen).
+- `python src/inference_example.py --model_name_or_path <model_dir> --dataset_path data/retrieval/G3`: Spot-check retrieval quality and produce `top5_results_with_matches.json`.
 
 ## Coding Style & Naming Conventions
 - Python modules follow PEP 8: 4-space indentation, `snake_case` functions, `CamelCase` classes, UPPER_SNAKE constants.

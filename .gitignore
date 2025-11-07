@@ -16,4 +16,5 @@ log_file.txt
 
 o.py
 
-log/       
+log/
+results/
