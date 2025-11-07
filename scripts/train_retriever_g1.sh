@@ -5,7 +5,8 @@ export HF_ENDPOINT=https://hf-mirror.com
 export DATA_DIR="data/retrieval/G1/"
 export MODEL_NAME="bert-base-uncased"
 export OUTPUT_PATH="retriever_model"
-export GPU_ID="5"
+export GPU_ID="2"
+export LOG_PATH="log/G1"
 
 python toolbench/retrieval/train.py \
     --data_path $DATA_DIR \
@@ -16,4 +17,5 @@ python toolbench/retrieval/train.py \
     --learning_rate 2e-5 \
     --warmup_steps 500 \
     --max_seq_length 256 \
-    --gpu_id $GPU_ID
+    --gpu_id $GPU_ID \
+    --log_path $LOG_PATH
