@@ -164,9 +164,11 @@ def resolve_log_directory(log_dir: str | Path | None) -> Path:
     return path
 
 
-def prepare_log_file(file_name: str, params: dict, log_dir: str | Path | None = None) -> Path:
-    log_directory = resolve_log_directory(log_dir)
-    log_file_path = log_directory / file_name
+def prepare_log_outputs(run_name: str, params: dict, log_dir: str | Path | None = None):
+    base_dir = resolve_log_directory(log_dir) / run_name
+    base_dir.mkdir(parents=True, exist_ok=True)
+    log_file_path = base_dir / "run.log"
+    results_path = base_dir / "results.json"
     separator = "=" * 80
     needs_newline = log_file_path.exists() and log_file_path.stat().st_size > 0
     with log_file_path.open("a", encoding="utf-8") as f:
@@ -175,7 +177,7 @@ def prepare_log_file(file_name: str, params: dict, log_dir: str | Path | None = 
         f.write(f"{separator}\nRun started at {datetime.now().isoformat()}\n")
         if params:
             f.write(json.dumps(params, ensure_ascii=False, sort_keys=True) + "\n")
-    return log_file_path
+    return log_file_path, results_path
 
 
 def configure_logging(log_file_path: Path, extra_filters=None):

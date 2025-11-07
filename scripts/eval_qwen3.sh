@@ -6,7 +6,6 @@ export HF_ENDPOINT=https://hf-mirror.com
 
 DATA_DIR="${DATA_DIR:-data/retrieval/G1/}"
 LOG_DIR="${LOG_DIR:-log/eval/Qwen3}"
-RESULTS_PATH="${RESULTS_PATH:-results/qwen3_G1.json}"
 
 python src/main.py \
   --data_path "$DATA_DIR" \
@@ -17,5 +16,4 @@ python src/main.py \
   --train_batch_size 8 \
   --learning_rate 2e-5 \
   --num_epochs 0 \
-  --log_path "$LOG_DIR" \
-  --results_path "$RESULTS_PATH"
+  --log_path "$LOG_DIR"

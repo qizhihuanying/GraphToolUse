@@ -208,9 +208,7 @@ python src/main.py \
     --learning_rate 2e-5 \
     --num_epochs 0 \
     --torch_dtype auto \
-    --log_path log/eval/Qwen3 \
-    --results_path results/qwen3_G1.json \
-    --show_progress_bar
+    --log_path log/eval/Qwen3
 ```
 
 ### Training ToolLLaMA

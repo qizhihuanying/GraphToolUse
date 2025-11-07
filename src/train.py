@@ -40,13 +40,11 @@ def _patch_trainer_logging_callbacks():
 
     def patched_progress_on_log(self, args, state, control, logs=None, **kwargs):
         if logs is None:
-            return original_progress_on_log(self, args, state, control, logs, **kwargs)
-        logs_copy = dict(logs)
-        result = original_progress_on_log(self, args, state, control, logs, **kwargs)
+            return
         if not getattr(args, "disable_tqdm", False) and getattr(state, "is_world_process_zero", True):
+            logs_copy = dict(logs)
             logs_copy.pop("total_flos", None)
             logging.info(json.dumps(logs_copy, ensure_ascii=False))
-        return result
 
     PrinterCallback.on_log = patched_printer_on_log
     ProgressCallback.on_log = patched_progress_on_log
@@ -203,7 +201,7 @@ class Trainer:
         self.num_epochs = num_epochs
         self.warmup_steps = warmup_steps
         self.tensorboard_dir = tensorboard_dir
-        self.results_path = results_path
+        self.results_path = Path(results_path) if results_path else None
         self.results = {}
 
     def train_epoch(self):
@@ -222,9 +220,16 @@ class Trainer:
         self.tensorboard_dir.mkdir(parents=True, exist_ok=True)
         logs_writer = SummaryWriter(self.tensorboard_dir)
 
-        def log_callback(train_ix, global_step, training_steps, current_lr, loss_value):
-            logs_writer.add_scalar("train_loss", loss_value, global_step)
-            logs_writer.add_scalar("lr", current_lr[0], global_step)
+        def log_callback(*callback_args):
+            if len(callback_args) == 5:
+                _, global_step, _, current_lr, loss_value = callback_args
+                logs_writer.add_scalar("train_loss", loss_value, global_step)
+                logs_writer.add_scalar("lr", current_lr[0], global_step)
+            elif len(callback_args) == 3:
+                value, epoch, steps = callback_args
+                logs_writer.add_scalar("eval_metric", value, steps)
+            else:
+                logging.debug("Unexpected callback args: %s", callback_args)
 
         self.model.fit(
             train_dataloader=self.dataloader,

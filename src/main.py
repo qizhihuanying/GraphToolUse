@@ -16,7 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from data_loader import prepare_training_data
 from train import APIEvaluator, Trainer, get_model
-from utils import DeviceNameFilter, configure_logging, prepare_log_file
+from utils import DeviceNameFilter, configure_logging, prepare_log_outputs
 
 
 def build_arg_parser():
@@ -38,13 +38,12 @@ def build_arg_parser():
     parser.add_argument("--log_path", type=str, default=None,
                         help="Directory where training logs will be stored. Defaults to <repo>/log.")
     parser.add_argument("--torch_seed", type=int, default=42, help="Random seed for torch.")
-    parser.add_argument("--results_path", type=str, default=None, help="Optional JSON file to store metrics.")
     return parser
 
 
 def build_log_file_name(args) -> str:
     lr_str = f"{args.learning_rate:g}"
-    return f"lr={lr_str}+bs={args.train_batch_size}+epoch={args.num_epochs}.log"
+    return f"lr={lr_str}+bs={args.train_batch_size}+epoch={args.num_epochs}"
 
 
 def main():
@@ -54,7 +53,7 @@ def main():
     if args.gpu_id is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
 
-    log_file_path = prepare_log_file(build_log_file_name(args), vars(args), args.log_path)
+    log_file_path, results_path = prepare_log_outputs(build_log_file_name(args), vars(args), args.log_path)
     configure_logging(log_file_path, extra_filters=[DeviceNameFilter()])
 
     torch.manual_seed(args.torch_seed)
@@ -101,7 +100,6 @@ def main():
         eval_evaluator = None
         test_evaluator = evaluator
 
-    results_path = Path(args.results_path) if args.results_path else None
     trainer = Trainer(
         model=model,
         dataloader=dataloader,

@@ -12,7 +12,7 @@ python src/main.py \
     --data_path $DATA_DIR \
     --model_name_or_path $MODEL_NAME \
     --output_path $OUTPUT_PATH \
-    --num_epochs 5 \
+    --num_epochs 0 \
     --train_batch_size 32 \
     --learning_rate 2e-5 \
     --warmup_steps 500 \
