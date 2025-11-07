@@ -32,6 +32,8 @@ parser.add_argument("--warmup_steps", default=500, type=float, required=True,
                     help="Warmup steps.")
 parser.add_argument("--max_seq_length", default=256, type=int, required=True,
                     help="Max sequence length.")
+parser.add_argument("--gpu_id", default=None, type=str, required=False,
+                    help="Comma-separated CUDA device id(s) to use, e.g. '0' or '0,1'.")
 args = parser.parse_args()
 
 logging.basicConfig(format='%(asctime)s - %(message)s',
@@ -40,8 +42,12 @@ logging.basicConfig(format='%(asctime)s - %(message)s',
                     handlers=[LoggingHandler()])
 logger = logging.getLogger(__name__)
 
+if args.gpu_id is not None:
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
+
 torch.manual_seed(42)
-torch.cuda.manual_seed(42)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(42)
 
 num_epochs = args.num_epochs
 train_batch_size = args.train_batch_size
@@ -67,6 +73,8 @@ def log_callback_st(train_ix, global_step, training_steps, current_lr, loss_valu
 word_embedding_model = models.Transformer(args.model_name, max_seq_length=args.max_seq_length)
 pooling_model = models.Pooling(word_embedding_model.get_word_embedding_dimension())
 model = SentenceTransformer(modules=[word_embedding_model, pooling_model])
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model.to(device)
 
 ir_train_queries = {}
 ir_test_queries = {}
@@ -104,5 +112,4 @@ model.fit(train_objectives=[(train_dataloader, train_loss)],
                 optimizer_params={'lr': lr},
                 output_path=model_save_path
                 )
-
 

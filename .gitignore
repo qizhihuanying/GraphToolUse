@@ -13,3 +13,5 @@ checkpoints/
 retriever_model/
 
 log_file.txt
+
+o.py
