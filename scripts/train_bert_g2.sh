@@ -5,7 +5,7 @@ export HF_ENDPOINT=https://hf-mirror.com
 export DATA_DIR="data/retrieval/G2/"
 export MODEL_NAME="bert-base-uncased"
 export OUTPUT_PATH="retriever_model"
-export GPU_ID="5"
+export GPU_ID="6"
 export LOG_PATH="log/BERT-G2"
 
 python src/main.py \
