@@ -4,9 +4,9 @@ export NCCL_IB_DISABLE=1
 export HF_ENDPOINT=https://hf-mirror.com
 export DATA_DIR="data/retrieval/G3/"
 export OUTPUT_PATH="retriever_model"
-export MODEL_NAME="Qwen/Qwen3-Embedding-0.6B"
+export MODEL_NAME="Qwen/Qwen3-Embedding-8B"
 export GPU_ID="7"
-export LOG_PATH="${LOG_PATH:-log/Qwen3_G3}"
+export LOG_PATH="${LOG_PATH:-log/Qwen3_8B_G3}"
 
 python src/main.py \
     --data_path $DATA_DIR \

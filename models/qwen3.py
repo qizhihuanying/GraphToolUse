@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Sequence
 
+import logging
 import torch
 from transformers import AutoModel, AutoTokenizer
+from sentence_transformers import SentenceTransformer
 
 from models.base import RetrievalModel
 
@@ -26,16 +28,29 @@ class Qwen3Retriever(RetrievalModel):
         device: str | None = None,
     ):
         super().__init__(device=device)
-        dtype = self._resolve_dtype(torch_dtype)
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True)
-        self.model = AutoModel.from_pretrained(
+        self.is_sentence_transformer = False
+        self.st_model = None
+        try:
+            self.st_model = SentenceTransformer(model_name_or_path, device=self.device)
+            self.st_model.to(self.device)
+            self.is_sentence_transformer = True
+            self.max_seq_length = self.st_model.max_seq_length or max_seq_length
+        except Exception as err:
+            logging.info(
+                "Failed to load %s via SentenceTransformer (%s). Falling back to AutoModel + mean pooling.",
+                model_name_or_path,
+                err,
+            )
+            dtype = self._resolve_dtype(torch_dtype)
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True)
+            self.model = AutoModel.from_pretrained(
             model_name_or_path,
             trust_remote_code=True,
             dtype=dtype,
         )
-        self.model.to(self.device)
-        self.model.eval()
-        self.max_seq_length = max_seq_length
+            self.model.to(self.device)
+            self.model.eval()
+            self.max_seq_length = max_seq_length
 
     def _resolve_dtype(self, torch_dtype: str):
         if torch_dtype == "auto":
@@ -56,6 +71,15 @@ class Qwen3Retriever(RetrievalModel):
         convert_to_tensor: bool = True,
         **kwargs,
     ):
+        if self.is_sentence_transformer:
+            return self.st_model.encode(
+                sentences,
+                batch_size=batch_size,
+                show_progress_bar=show_progress_bar,
+                convert_to_tensor=convert_to_tensor,
+                device=self.device,
+            )
+
         embeddings = []
         iterator = range(0, len(sentences), batch_size)
         if show_progress_bar:
