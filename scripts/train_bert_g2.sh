@@ -8,6 +8,8 @@ export OUTPUT_PATH="retriever_model"
 export GPU_ID="6"
 export LOG_PATH="log/BERT-G2"
 
+export CUDA_VISIBLE_DEVICES="$GPU_ID"
+
 python src/main.py \
     --data_path $DATA_DIR \
     --model_name_or_path $MODEL_NAME \

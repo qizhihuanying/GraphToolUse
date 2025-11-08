@@ -8,6 +8,8 @@ export MODEL_NAME="Qwen/Qwen3-Embedding-0.6B"
 export GPU_ID="7"
 export LOG_PATH="${LOG_PATH:-log/Qwen3_0.6B_G2}"
 
+export CUDA_VISIBLE_DEVICES="$GPU_ID"
+
 python src/main.py \
     --data_path $DATA_DIR \
     --model_type qwen3 \
