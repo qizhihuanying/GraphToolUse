@@ -414,7 +414,7 @@ def prepare_tool_graph_data(
     test_file: Optional[str] = None,
     min_edge_frequency: int = 2,
     embedding_model_name: str = "Qwen/Qwen3-0.6B",
-    embedding_batch_size: int = 32,
+    embedding_batch_size: int = 4,
     cache_path: Optional[str] = None,
     refresh_cache: bool = False,
     device: Optional[str] = None,
@@ -475,35 +475,45 @@ def prepare_tool_graph_data(
     num_edges = sum(len(neigh) for neigh in adjacency.values()) // 2
     logging.info("大图节点数=%d, 边数(无向)=%d", len(tool_to_id), num_edges)
 
-    queries = [sample.query for sample in all_samples]
-    feature_dim = graph_resources.get("feature_dim") or (tool_embeddings.shape[1] if tool_embeddings.numel() else None)
-    query_embeddings_all = _encode_texts(
-        embedder,
-        queries,
-        batch_size=embedding_batch_size,
-        expected_dim=feature_dim,
-    )
 
-    datasets: Dict[str, Optional[ToolGraphDataset]] = {}
-    offset = 0
-    for split, samples in split_samples.items():
-        count = len(samples)
-        if count == 0:
-            datasets[split] = None
-            continue
-        split_query_embeddings = query_embeddings_all[offset : offset + count]
-        datasets[split] = ToolGraphDataset(
-            samples=samples,
-            query_embeddings=split_query_embeddings,
-            tool_embeddings=tool_embeddings,
-            adjacency=adjacency,
-            device=device,
+    dataset_cache_file = base_path / "graph_dataset_cache.pt"
+    if dataset_cache_file.exists() and not refresh_cache:
+        logging.info("加载缓存的PyG Dataset: %s", dataset_cache_file)
+        payload = torch.load(dataset_cache_file, map_location="cpu")
+        datasets = {split: payload.get(split) for split in ("train", "eval", "test")}
+    else:
+        queries = [sample.query for sample in all_samples]
+        feature_dim = graph_resources.get("feature_dim") or (tool_embeddings.shape[1] if tool_embeddings.numel() else None)
+        query_embeddings_all = _encode_texts(
+            embedder,
+            queries,
+            batch_size=embedding_batch_size,
+            expected_dim=feature_dim,
         )
-        offset += count
+
+        datasets: Dict[str, Optional[ToolGraphDataset]] = {}
+        offset = 0
+        for split, samples in split_samples.items():
+            count = len(samples)
+            if count == 0:
+                datasets[split] = None
+                continue
+            split_query_embeddings = query_embeddings_all[offset : offset + count]
+            datasets[split] = ToolGraphDataset(
+                samples=samples,
+                query_embeddings=split_query_embeddings,
+                tool_embeddings=tool_embeddings,
+                adjacency=adjacency,
+                device=device,
+            )
+            offset += count
+
+        torch.save(datasets, dataset_cache_file)
+        logging.info("PyG Dataset缓存已写入: %s", dataset_cache_file)
 
     id_to_tool = {idx: key for key, idx in tool_to_id.items()}
     graph_meta = {
-        "feature_dim": feature_dim,
+        "feature_dim": graph_resources.get("feature_dim") or tool_embeddings.shape[1],
         "tool_to_id": tool_to_id,
         "id_to_tool": id_to_tool,
         "num_edges": num_edges,

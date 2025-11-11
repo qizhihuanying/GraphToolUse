@@ -46,7 +46,14 @@ def build_arg_parser():
 
 def build_log_file_name(args) -> str:
     lr_str = f"{args.learning_rate:g}"
-    return f"lr={lr_str}+bs={args.batch_size}+epoch={args.num_epochs}"
+    parts = [
+        f"lr={lr_str}",
+        f"bs={args.batch_size}",
+        f"epoch={args.num_epochs}",
+    ]
+    if getattr(args, "model_type", None) == "gnn":
+        parts.append(f"layers={args.gnn_layers}")
+    return "+".join(parts)
 
 
 def main():
@@ -80,8 +87,8 @@ def main():
     graph_datasets = None
     graph_meta = None
     if args.model_type == "gnn":
-        GRAPH_EMBEDDING_MODEL = "Qwen/Qwen3-0.6B"
-        GRAPH_EMBED_BATCH_SIZE = 32
+        GRAPH_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+        GRAPH_EMBED_BATCH_SIZE = 4
         GRAPH_MIN_EDGE_FREQ = 2
         graph_datasets, graph_meta = prepare_tool_graph_data(
             args.data_path,
@@ -127,6 +134,8 @@ def main():
                 train_dataset,
                 shuffle=True,
                 batch_size=args.batch_size,
+                num_workers=8,
+                pin_memory=torch.cuda.is_available(),
             )
 
         eval_dataset = graph_datasets.get("eval") if graph_datasets else None

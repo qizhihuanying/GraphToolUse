@@ -11,6 +11,7 @@ from torch.optim import AdamW
 from torch_geometric.data import Batch
 from torch_geometric.nn import GCNConv
 from transformers.optimization import get_linear_schedule_with_warmup
+from tqdm.auto import tqdm
 
 from models.base import RetrievalModel
 
@@ -65,6 +66,16 @@ class QueryAwareGNN(RetrievalModel, nn.Module):
 
     def get_loss(self):  # 与Trainer接口保持一致
         return None
+
+    def encode(  # type: ignore[override]
+        self,
+        sentences,
+        batch_size: int = 32,
+        show_progress_bar: bool = False,
+        convert_to_tensor: bool = True,
+        **kwargs,
+    ):
+        raise NotImplementedError("QueryAwareGNN 不支持 encode 操作，请通过predict接口进行推理。")
 
     def forward(self, batch: Batch):
         if batch.x is None:
@@ -154,9 +165,13 @@ class QueryAwareGNN(RetrievalModel, nn.Module):
             scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, total_steps)
 
         global_step = 0
+        best_metric = float('-inf')
+        best_state = None
+
         for epoch in range(epochs):
             self.train()
-            for batch in train_dataloader:
+            progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{epochs}")
+            for batch in progress_bar:
                 batch = batch.to(self.device)
                 tool_logits, _, _, tool_mask = self.forward(batch)
                 labels = batch.y[tool_mask].to(self.device)
@@ -170,30 +185,59 @@ class QueryAwareGNN(RetrievalModel, nn.Module):
                     scheduler.step()
 
                 global_step += 1
+                if global_step % 50 == 0:
+                    logging.info(
+                        "epoch=%d step=%d loss=%.4f", epoch + 1, global_step, loss.item()
+                    )
                 if callback is not None:
                     current_lr = scheduler.get_last_lr() if scheduler is not None else [learning_rate]
                     callback(None, global_step, None, current_lr, loss.item())
 
             if evaluator is not None:
                 scores = evaluator.compute_metrices(self)
+                if isinstance(scores, Sequence):
+                    top_k = getattr(evaluator, "top_k", tuple(range(1, len(scores) + 1)))
+                    metric_pairs = []
+                    for idx, k in enumerate(top_k):
+                        if idx >= len(scores):
+                            break
+                        metric_pairs.append((k, float(scores[idx])))
+                    if metric_pairs:
+                        metric_text = ", ".join(
+                            f"ndcg@{k}={score:.4f}" for k, score in metric_pairs
+                        )
+                        logging.info("Epoch %d eval metrics: %s", epoch + 1, metric_text)
                 metric = float(min(scores)) if isinstance(scores, Sequence) else float(scores)
+                if metric > best_metric:
+                    best_metric = metric
+                    best_state = {k: v.cpu().clone() for k, v in self.state_dict().items()}
+                    logging.info("New best metric %.4f at epoch %d", metric, epoch + 1)
                 if callback is not None:
                     callback(metric, epoch, global_step)
 
+        # Save final model
         self.save(output_path)
+
+        if best_state is not None:
+            best_dir = Path(output_path) / "best_model"
+            best_dir.mkdir(parents=True, exist_ok=True)
+            torch.save({"state_dict": best_state, "config": self._export_config()}, best_dir / "query_aware_gnn.pt")
 
     def save(self, output_path: str):
         output_dir = Path(output_path)
         output_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "state_dict": self.state_dict(),
-            "config": {
-                "input_dim": self.input_dim,
-                "hidden_dim": self.hidden_dim,
-                "gnn_layers": self.gnn_layers,
-                "dropout_rate": self.dropout_rate,
-                "weight_decay": self.weight_decay,
-                "pos_weight": float(self.pos_weight.item()),
-            },
+            "config": self._export_config(),
         }
         torch.save(payload, output_dir / "query_aware_gnn.pt")
+
+    def _export_config(self):
+        return {
+            "input_dim": self.input_dim,
+            "hidden_dim": self.hidden_dim,
+            "gnn_layers": self.gnn_layers,
+            "dropout_rate": self.dropout_rate,
+            "weight_decay": self.weight_decay,
+            "pos_weight": float(self.pos_weight.item()),
+        }

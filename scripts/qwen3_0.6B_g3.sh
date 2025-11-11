@@ -16,7 +16,7 @@ python src/main.py \
     --model_name_or_path $MODEL_NAME \
     --output_path $OUTPUT_PATH \
     --num_epochs 0 \
-    --batch_size 1 \
+    --batch_size 32 \
     --learning_rate 2e-5 \
     --warmup_steps 500 \
     --max_seq_length 256 \
