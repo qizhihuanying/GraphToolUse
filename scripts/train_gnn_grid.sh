@@ -10,7 +10,7 @@ export HF_ENDPOINT=https://hf-mirror.com
 # ===== 可配置参数 =====
 LOG_ROOT="log/GNN-G3"
 DATASET="G3"
-GPUS=(0 0 1 1 4 7 7)  
+GPUS=(0 0 4 4)  
 LEARNING_RATES=(1e-5 3e-5 1e-4 3e-4 1e-3 3e-3 3e-6)
 GNN_LAYERS_LIST=(2 3 5 10 50)
 EPOCHS_LIST=(4 5)

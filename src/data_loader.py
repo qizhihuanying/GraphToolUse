@@ -23,6 +23,26 @@ except ImportError:  # pragma: no cover - optional dependency for graph GNNs
 
 from models.qwen3 import Qwen3Retriever
 
+_TOOL_VOCAB_CACHE_TAG = "train_only_v1"
+_GRAPH_DATASET_CACHE_TAG = "train_only_v2"
+
+
+@dataclass
+class ExtraToolNode:
+    """仅在大图之外出现的工具节点，测试/验证时视为孤立节点。"""
+
+    text: str
+    is_positive: bool
+    embedding: Optional[torch.Tensor] = None
+
+
+@dataclass
+class CandidateSlot:
+    """记录候选节点在局部子图中的排列，以及映射到的全局/额外节点索引。"""
+
+    is_known: bool
+    index: int
+
 
 @dataclass
 class ToolGraphSample:
@@ -32,6 +52,8 @@ class ToolGraphSample:
     query_id: Any
     candidate_tool_ids: List[int]
     positive_tool_ids: Set[int]
+    candidate_slots: List[CandidateSlot]
+    extra_tools: List[ExtraToolNode]
 
 
 class ToolGraphDataset(Dataset):
@@ -54,7 +76,10 @@ class ToolGraphDataset(Dataset):
         self.tool_embeddings = tool_embeddings.to(torch.float32)
         self.adjacency = adjacency
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.feature_dim = self.tool_embeddings.shape[1] if self.tool_embeddings.numel() else 0
+        if self.tool_embeddings.numel():
+            self.feature_dim = self.tool_embeddings.shape[1]
+        else:
+            self.feature_dim = self.query_embeddings.shape[1]
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -63,35 +88,69 @@ class ToolGraphDataset(Dataset):
         sample = self.samples[idx]
         query_embedding = self.query_embeddings[idx]
         tool_ids = sample.candidate_tool_ids
+        extra_tools = sample.extra_tools
+        candidate_slots = sample.candidate_slots
 
-        tool_embeddings = self.tool_embeddings[torch.tensor(tool_ids, dtype=torch.long)]
-        query_embedding = query_embedding.unsqueeze(0)
-        node_features = torch.cat([query_embedding, tool_embeddings], dim=0)
+        if tool_ids:
+            known_embeddings = self.tool_embeddings[torch.tensor(tool_ids, dtype=torch.long)]
+        else:
+            known_embeddings = torch.empty((0, self.feature_dim), dtype=torch.float32)
+        if extra_tools:
+            stacked = []
+            for extra in extra_tools:
+                if extra.embedding is None:
+                    raise ValueError("额外工具节点缺少预计算的嵌入，请检查图数据预处理。")
+                stacked.append(extra.embedding)
+            extra_embeddings = torch.stack(stacked, dim=0).to(torch.float32)
+        else:
+            extra_embeddings = torch.empty((0, self.feature_dim), dtype=torch.float32)
 
-        node_type = torch.zeros(len(tool_ids) + 1, dtype=torch.long)
+        tool_embedding_list: List[torch.Tensor] = []
+        labels = torch.zeros(len(candidate_slots) + 1, dtype=torch.float32)
+
+        node_type = torch.zeros(len(candidate_slots) + 1, dtype=torch.long)
         node_type[1:] = 1  # 1表示工具节点
         tool_mask = node_type == 1
 
-        labels = torch.zeros_like(node_type, dtype=torch.float32)
         positive_set = set(sample.positive_tool_ids)
-        for local_idx, global_tool_id in enumerate(tool_ids, start=1):
-            if global_tool_id in positive_set:
-                labels[local_idx] = 1.0
+        local_id_map: Dict[int, int] = {}
+        tool_id_set: Set[int] = set()
+
+        for local_idx, slot in enumerate(candidate_slots, start=1):
+            if slot.is_known:
+                global_tool_id = tool_ids[slot.index]
+                tool_id_set.add(global_tool_id)
+                local_id_map[global_tool_id] = local_idx
+                embedding = known_embeddings[slot.index]
+                if global_tool_id in positive_set:
+                    labels[local_idx] = 1.0
+            else:
+                extra_tool = extra_tools[slot.index]
+                embedding = extra_embeddings[slot.index]
+                if extra_tool.is_positive:
+                    labels[local_idx] = 1.0
+            tool_embedding_list.append(embedding)
+
+        if tool_embedding_list:
+            tool_embeddings_tensor = torch.stack(tool_embedding_list, dim=0)
+        else:
+            tool_embeddings_tensor = torch.empty((0, self.feature_dim), dtype=torch.float32)
+
+        query_embedding = query_embedding.unsqueeze(0)
+        node_features = torch.cat([query_embedding, tool_embeddings_tensor], dim=0)
 
         edge_sources: List[int] = []
         edge_targets: List[int] = []
         edge_weights: List[float] = []
 
         # query节点与所有工具节点连接
-        for local_idx in range(1, len(tool_ids) + 1):
+        for local_idx in range(1, len(candidate_slots) + 1):
             edge_sources.extend([0, local_idx])
             edge_targets.extend([local_idx, 0])
             edge_weights.extend([1.0, 1.0])
 
         # 工具之间依据全局图连接
-        local_id_map = {global_id: local_idx for local_idx, global_id in enumerate(tool_ids, start=1)}
-        tool_id_set = set(tool_ids)
-        for global_src in tool_ids:
+        for global_src in tool_id_set:
             neighbors = self.adjacency.get(global_src, {})
             for global_tgt, weight in neighbors.items():
                 if global_tgt not in tool_id_set:
@@ -304,17 +363,40 @@ def _encode_texts(
     return embeddings.to(torch.float32).cpu()
 
 
+def _assign_extra_tool_embeddings(
+    samples: Sequence[ToolGraphSample],
+    embedder: Qwen3Retriever,
+    batch_size: int,
+    expected_dim: int,
+):
+    extra_texts: List[str] = []
+    owners: List[Tuple[int, int]] = []
+    for sample_idx, sample in enumerate(samples):
+        for extra_idx, extra in enumerate(sample.extra_tools):
+            if extra.embedding is not None:
+                continue
+            extra_texts.append(extra.text)
+            owners.append((sample_idx, extra_idx))
+
+    if not extra_texts:
+        return
+
+    embeddings = _encode_texts(embedder, extra_texts, batch_size=batch_size, expected_dim=expected_dim)
+    for tensor_idx, (sample_idx, extra_idx) in enumerate(owners):
+        samples[sample_idx].extra_tools[extra_idx].embedding = embeddings[tensor_idx]
+
+
 def _record_to_sample(record: dict, tool_to_id: Dict[str, int]) -> Optional[ToolGraphSample]:
     query_text = str(record.get("query") or "").strip()
     api_list = record.get("api_list") or record.get("apis") or []
-    candidate_keys: List[str] = []
+    candidate_entries: List[Tuple[str, dict]] = []
     seen = set()
     for api_entry in api_list:
         if not isinstance(api_entry, dict):
             continue
         key = _tool_key(api_entry.get("tool_name") or api_entry.get("tool"), api_entry.get("api_name") or api_entry.get("api"))
-        if key and key in tool_to_id and key not in seen:
-            candidate_keys.append(key)
+        if key and key not in seen:
+            candidate_entries.append((key, api_entry))
             seen.add(key)
 
     positive_entries = (
@@ -324,7 +406,7 @@ def _record_to_sample(record: dict, tool_to_id: Dict[str, int]) -> Optional[Tool
         or record.get("outputs")
         or []
     )
-    positive_ids: Set[int] = set()
+    positive_keys: Set[str] = set()
     for item in positive_entries:
         tool_name = None
         api_name = None
@@ -334,14 +416,29 @@ def _record_to_sample(record: dict, tool_to_id: Dict[str, int]) -> Optional[Tool
             tool_name = item.get("tool_name") or item.get("tool")
             api_name = item.get("api_name") or item.get("api")
         key = _tool_key(tool_name, api_name)
-        if key and key in tool_to_id:
-            positive_ids.add(tool_to_id[key])
+        if key:
+            positive_keys.add(key)
 
-    candidate_ids = [tool_to_id[key] for key in candidate_keys if key in tool_to_id]
-    candidate_id_set = set(candidate_ids)
-    positive_ids = {pid for pid in positive_ids if pid in candidate_id_set}
+    candidate_ids: List[int] = []
+    extra_tools: List[ExtraToolNode] = []
+    candidate_slots: List[CandidateSlot] = []
+    candidate_key_set = {key for key, _ in candidate_entries}
+    positive_keys &= candidate_key_set
 
-    if not candidate_ids or not positive_ids:
+    for key, api_entry in candidate_entries:
+        if key in tool_to_id:
+            idx = len(candidate_ids)
+            candidate_ids.append(tool_to_id[key])
+            candidate_slots.append(CandidateSlot(is_known=True, index=idx))
+        else:
+            node_text = _build_tool_text(api_entry)
+            extra_tools.append(ExtraToolNode(text=node_text, is_positive=(key in positive_keys)))
+            candidate_slots.append(CandidateSlot(is_known=False, index=len(extra_tools) - 1))
+
+    positive_ids: Set[int] = {tool_to_id[key] for key in positive_keys if key in tool_to_id}
+
+    has_positive = bool(positive_ids) or any(extra.is_positive for extra in extra_tools)
+    if not candidate_slots or not has_positive:
         return None
 
     return ToolGraphSample(
@@ -349,6 +446,8 @@ def _record_to_sample(record: dict, tool_to_id: Dict[str, int]) -> Optional[Tool
         query_id=record.get("query_id"),
         candidate_tool_ids=candidate_ids,
         positive_tool_ids=positive_ids,
+        candidate_slots=candidate_slots,
+        extra_tools=extra_tools,
     )
 
 
@@ -378,12 +477,15 @@ def _build_tool_graph_resources(
     refresh_cache: bool,
     embedder: Qwen3Retriever,
     embedding_batch_size: int,
+    cache_tag: str,
 ) -> Dict[str, Any]:
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     if cache_path.exists() and not refresh_cache:
-        logging.info("加载缓存的工具图资源: %s", cache_path)
         payload = torch.load(cache_path, map_location="cpu")
-        return payload
+        if isinstance(payload, dict) and payload.get("_tag") == cache_tag:
+            logging.info("加载缓存的工具图资源: %s", cache_path)
+            return payload
+        logging.info("缓存的工具图资源tag不匹配，重新构建: %s", cache_path)
 
     tool_metadata = _collect_tool_metadata(records)
     if not tool_metadata:
@@ -400,6 +502,7 @@ def _build_tool_graph_resources(
         "tool_keys": sorted_keys,
         "feature_dim": tool_embeddings.shape[1] if tool_embeddings.numel() else 0,
         "min_edge_frequency": min_edge_frequency,
+        "_tag": cache_tag,
     }
     torch.save(payload, cache_path)
     logging.info("工具图资源已写入缓存: %s", cache_path)
@@ -435,25 +538,29 @@ def prepare_tool_graph_data(
     if not raw_splits:
         raise ValueError("未找到任何图数据文件，请使用--graph_*参数或确保目录下存在train/eval/test json。")
 
-    ordered_records: List[dict] = []
-    for records in raw_splits.values():
-        ordered_records.extend(records)
+    train_records = list(raw_splits.get("train", []))
+    if not train_records:
+        raise ValueError("训练split为空或未提供，无法构建图工具全集。")
 
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     embedder = Qwen3Retriever(model_name_or_path=embedding_model_name, device=device)
 
     cache_file = Path(cache_path) if cache_path else base_path / "tool_graph_cache.pt"
     graph_resources = _build_tool_graph_resources(
-        ordered_records,
+        train_records,
         min_edge_frequency=min_edge_frequency,
         cache_path=cache_file,
         refresh_cache=refresh_cache,
         embedder=embedder,
         embedding_batch_size=embedding_batch_size,
+        cache_tag=_TOOL_VOCAB_CACHE_TAG,
     )
 
     tool_to_id = graph_resources["tool_to_id"]
     tool_embeddings = graph_resources["tool_embeddings"]
+    feature_dim = graph_resources.get("feature_dim") or (tool_embeddings.shape[1] if tool_embeddings.numel() else None)
+    if feature_dim is None:
+        raise ValueError("无法确定工具嵌入维度，请检查工具嵌入构建。")
 
     split_samples: Dict[str, List[ToolGraphSample]] = {}
     all_samples: List[ToolGraphSample] = []
@@ -467,23 +574,33 @@ def prepare_tool_graph_data(
         split_samples[split] = samples
         logging.info("%s split 保留%d条样本（过滤掉候选或标签缺失的数据）", split, len(samples))
 
+    train_samples = split_samples.get("train", [])
+    if not train_samples:
+        raise ValueError("训练split没有可用样本，请检查是否包含合法的候选与正例。")
+
     if not all_samples:
         raise ValueError("所有样本都被过滤掉了，请检查数据内容是否包含api_list和relevant APIs。")
 
-    adjacency = _count_tool_cooccurrences(all_samples, min_edge_frequency=min_edge_frequency)
+    _assign_extra_tool_embeddings(all_samples, embedder, embedding_batch_size, expected_dim=feature_dim)
+
+    adjacency = _count_tool_cooccurrences(train_samples, min_edge_frequency=min_edge_frequency)
     adjacency = {src: dict(neigh) for src, neigh in adjacency.items()}
     num_edges = sum(len(neigh) for neigh in adjacency.values()) // 2
     logging.info("大图节点数=%d, 边数(无向)=%d", len(tool_to_id), num_edges)
 
-
     dataset_cache_file = base_path / "graph_dataset_cache.pt"
+    datasets: Optional[Dict[str, Optional[ToolGraphDataset]]] = None
     if dataset_cache_file.exists() and not refresh_cache:
-        logging.info("加载缓存的PyG Dataset: %s", dataset_cache_file)
         payload = torch.load(dataset_cache_file, map_location="cpu")
-        datasets = {split: payload.get(split) for split in ("train", "eval", "test")}
-    else:
+        if isinstance(payload, dict) and payload.get("_tag") == _GRAPH_DATASET_CACHE_TAG:
+            logging.info("加载缓存的PyG Dataset: %s", dataset_cache_file)
+            cached_splits = payload.get("splits", {})
+            datasets = {split: cached_splits.get(split) for split in ("train", "eval", "test")}
+        else:
+            logging.info("PyG Dataset缓存tag不匹配，重新构建: %s", dataset_cache_file)
+
+    if datasets is None:
         queries = [sample.query for sample in all_samples]
-        feature_dim = graph_resources.get("feature_dim") or (tool_embeddings.shape[1] if tool_embeddings.numel() else None)
         query_embeddings_all = _encode_texts(
             embedder,
             queries,
@@ -508,12 +625,13 @@ def prepare_tool_graph_data(
             )
             offset += count
 
-        torch.save(datasets, dataset_cache_file)
+        payload = {"_tag": _GRAPH_DATASET_CACHE_TAG, "splits": datasets}
+        torch.save(payload, dataset_cache_file)
         logging.info("PyG Dataset缓存已写入: %s", dataset_cache_file)
 
     id_to_tool = {idx: key for key, idx in tool_to_id.items()}
     graph_meta = {
-        "feature_dim": graph_resources.get("feature_dim") or tool_embeddings.shape[1],
+        "feature_dim": feature_dim,
         "tool_to_id": tool_to_id,
         "id_to_tool": id_to_tool,
         "num_edges": num_edges,

@@ -7,7 +7,7 @@ export HF_ENDPOINT=https://hf-mirror.com
 export DATA_PATH="data/retrieval_graph/G3"
 export MODEL_NAME="query_aware_gnn"
 export OUTPUT_PATH="retriever_model"
-export GPU_ID="0"
+export GPU_ID="4"
 export LOG_PATH="log/GNN-G3"
 
 export CUDA_VISIBLE_DEVICES="$GPU_ID"

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import List, Optional, Sequence
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -139,6 +140,95 @@ class QueryAwareGNN(RetrievalModel, nn.Module):
                 predictions = (tool_probs > threshold).float()
         return predictions
 
+    def describe_last_graph(
+        self,
+        batch: Batch,
+        tool_logits: torch.Tensor,
+        labels: Optional[torch.Tensor],
+        query_logits: torch.Tensor,
+        tool_batch_index: torch.Tensor,
+    ) -> Optional[str]:
+        summary = self._collect_last_graph_summary(batch, tool_logits, labels, query_logits, tool_batch_index)
+        if summary is None:
+            return None
+
+        probs = summary["probabilities"]
+        preview_count = 5
+        formatted_probs = ", ".join(f"{score:.3f}" for score in probs[:preview_count])
+        if len(probs) > preview_count:
+            formatted_probs += ", ..."
+
+        parts = [
+            f"apis={summary['num_tools']}",
+            f"pred_probs=[{formatted_probs}]",
+            f"threshold={summary['threshold']:.3f}",
+            f"pred_pos={summary['predicted_positive']}",
+        ]
+        hit_count = summary.get("hit_count")
+        positive_total = summary.get("positive_total")
+        if positive_total is not None:
+            parts.append(f"gold_pos={positive_total}")
+        if hit_count is not None:
+            parts.append(f"tp={hit_count}")
+        return " ".join(parts)
+
+    def _collect_last_graph_summary(
+        self,
+        batch: Batch,
+        tool_logits: torch.Tensor,
+        labels: Optional[torch.Tensor],
+        query_logits: torch.Tensor,
+        tool_batch_index: torch.Tensor,
+    ) -> Optional[dict]:
+        if batch.num_graphs == 0:
+            return None
+        last_graph_id = int(batch.num_graphs - 1)
+
+        tool_batch_cpu = tool_batch_index.detach().cpu()
+        selection = tool_batch_cpu == last_graph_id
+        if not torch.any(selection):
+            return None
+
+        logits_cpu = tool_logits.detach().cpu()
+        logits_graph = logits_cpu[selection]
+        probabilities = torch.sigmoid(logits_graph)
+
+        threshold = self._extract_threshold_for_graph(batch, query_logits, last_graph_id)
+        predictions = (probabilities > threshold).float()
+        summary = {
+            "num_tools": int(probabilities.shape[0]),
+            "probabilities": probabilities.tolist(),
+            "threshold": float(threshold),
+            "predicted_positive": int(predictions.sum().item()),
+        }
+
+        if labels is not None:
+            labels_cpu = labels.detach().cpu()
+            labels_graph = labels_cpu[selection]
+            positive_mask = labels_graph > 0.5
+            summary["positive_total"] = int(positive_mask.sum().item())
+            summary["hit_count"] = int(((predictions == 1.0) & positive_mask).sum().item())
+
+        return summary
+
+    def _extract_threshold_for_graph(self, batch: Batch, query_logits: torch.Tensor, graph_id: int) -> float:
+        if query_logits is None or query_logits.numel() == 0:
+            return 0.5
+        query_mask = self._get_query_mask(batch)
+        query_indices = batch.batch[query_mask].detach().cpu()
+        query_probs = torch.sigmoid(query_logits.detach().cpu())
+        mask = query_indices == graph_id
+        if not torch.any(mask):
+            return 0.5
+        return float(query_probs[mask][-1].item())
+
+    def _get_query_mask(self, batch: Batch) -> torch.Tensor:
+        node_type = getattr(batch, "node_type", None)
+        if node_type is not None:
+            return node_type == 0
+        query_mask, _ = self._create_masks_from_batch(batch)
+        return query_mask
+
     def _compute_loss(self, tool_logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         pos_weight = self.pos_weight.to(tool_logits.device)
         return F.binary_cross_entropy_with_logits(tool_logits, labels, pos_weight=pos_weight)
@@ -173,7 +263,7 @@ class QueryAwareGNN(RetrievalModel, nn.Module):
             progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{epochs}")
             for batch in progress_bar:
                 batch = batch.to(self.device)
-                tool_logits, _, _, tool_mask = self.forward(batch)
+                tool_logits, query_logits, tool_batch_index, tool_mask = self.forward(batch)
                 labels = batch.y[tool_mask].to(self.device)
                 loss = self._compute_loss(tool_logits, labels)
 
@@ -186,34 +276,56 @@ class QueryAwareGNN(RetrievalModel, nn.Module):
 
                 global_step += 1
                 if global_step % 50 == 0:
-                    logging.info(
-                        "epoch=%d step=%d loss=%.4f", epoch + 1, global_step, loss.item()
+                    detail_msg = self.describe_last_graph(
+                        batch,
+                        tool_logits,
+                        labels,
+                        query_logits,
+                        tool_batch_index,
                     )
+                    log_msg = f"epoch={epoch + 1} step={global_step} loss={loss.item():.4f}"
+                    if detail_msg:
+                        log_msg = f"{log_msg} | {detail_msg}"
+                    logging.info(log_msg)
                 if callback is not None:
                     current_lr = scheduler.get_last_lr() if scheduler is not None else [learning_rate]
                     callback(None, global_step, None, current_lr, loss.item())
 
             if evaluator is not None:
                 scores = evaluator.compute_metrices(self)
+                metric_pairs: List[tuple] = []
+                metric_dict = {}
                 if isinstance(scores, Sequence):
                     top_k = getattr(evaluator, "top_k", tuple(range(1, len(scores) + 1)))
-                    metric_pairs = []
                     for idx, k in enumerate(top_k):
                         if idx >= len(scores):
                             break
-                        metric_pairs.append((k, float(scores[idx])))
+                        score_value = float(scores[idx])
+                        metric_pairs.append((k, score_value))
+                        metric_dict[f"ndcg@{k}"] = score_value
                     if metric_pairs:
                         metric_text = ", ".join(
                             f"ndcg@{k}={score:.4f}" for k, score in metric_pairs
                         )
                         logging.info("Epoch %d eval metrics: %s", epoch + 1, metric_text)
-                metric = float(min(scores)) if isinstance(scores, Sequence) else float(scores)
-                if metric > best_metric:
-                    best_metric = metric
+                aggregate_metric = (
+                    float(np.mean(list(metric_dict.values()))) if metric_dict else float(scores)
+                )
+                if aggregate_metric > best_metric:
+                    best_metric = aggregate_metric
                     best_state = {k: v.cpu().clone() for k, v in self.state_dict().items()}
-                    logging.info("New best metric %.4f at epoch %d", metric, epoch + 1)
+                    logging.info("New best metric %.4f at epoch %d", aggregate_metric, epoch + 1)
                 if callback is not None:
-                    callback(metric, epoch, global_step)
+                    callback(
+                        {
+                            "metrics": metric_dict,
+                            "aggregate": aggregate_metric,
+                            "avg_ndcg": aggregate_metric,
+                            "split": "eval",
+                        },
+                        epoch,
+                        global_step,
+                    )
 
         # Save final model
         self.save(output_path)

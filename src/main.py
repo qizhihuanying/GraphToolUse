@@ -88,7 +88,7 @@ def main():
     graph_meta = None
     if args.model_type == "gnn":
         GRAPH_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"
-        GRAPH_EMBED_BATCH_SIZE = 4
+        GRAPH_EMBED_BATCH_SIZE = 1
         GRAPH_MIN_EDGE_FREQ = 2
         graph_datasets, graph_meta = prepare_tool_graph_data(
             args.data_path,
@@ -110,7 +110,7 @@ def main():
                 "input_dim": feature_dim,
                 "hidden_dim": args.gnn_hidden_dim,
                 "gnn_layers": args.gnn_layers,
-                "dropout_rate": 0.1,
+                "dropout_rate": 0,
                 "pos_weight": 1.0,
                 "weight_decay": args.gnn_weight_decay,
             }

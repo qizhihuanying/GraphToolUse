@@ -178,12 +178,14 @@ class APIEvaluator:
         model.eval()
         ndcg_lists: Dict[int, List[float]] = {k: [] for k in self.top_k}
 
+        last_detail_message = None
         with torch.no_grad():
             for batch in self.graph_loader:
                 batch = batch.to(self.device)
-                tool_logits, _, tool_batch_index, tool_mask = model(batch)
+                tool_logits, query_logits, tool_batch_index, tool_mask = model(batch)
+                labels = batch.y[tool_mask]
                 tool_scores = tool_logits.detach().cpu()
-                labels = batch.y[tool_mask].detach().cpu()
+                labels_cpu = labels.detach().cpu()
                 batch_indices = tool_batch_index.detach().cpu()
 
                 unique_graphs = batch_indices.unique(sorted=True).tolist()
@@ -191,13 +193,27 @@ class APIEvaluator:
                     graph_mask = batch_indices == graph_id
                     if not torch.any(graph_mask):
                         continue
-                    y_true = labels[graph_mask].numpy()
+                    y_true = labels_cpu[graph_mask].numpy()
                     y_pred = tool_scores[graph_mask].numpy()
                     if y_true.size == 0:
                         continue
                     for k in self.top_k:
                         score = ndcg_score([y_true], [y_pred], k=k)
                         ndcg_lists[k].append(float(score))
+
+                if hasattr(model, "describe_last_graph"):
+                    detail = model.describe_last_graph(
+                        batch,
+                        tool_logits,
+                        labels,
+                        query_logits,
+                        tool_batch_index,
+                    )
+                    if detail:
+                        last_detail_message = detail
+
+        if last_detail_message:
+            logging.info("Graph eval sample detail: %s", last_detail_message)
 
         return [float(np.mean(ndcg_lists[k])) if ndcg_lists[k] else 0.0 for k in self.top_k]
 
@@ -279,7 +295,11 @@ class Trainer:
         self.warmup_steps = warmup_steps
         self.tensorboard_dir = tensorboard_dir
         self.results_path = Path(results_path) if results_path else None
-        self.results = {}
+        self.results = {
+            "per_epoch_eval": [],
+            "best_eval": None,
+            "final_metrics": {},
+        }
 
     def train_epoch(self):
         if self.num_epochs <= 0:
@@ -304,7 +324,25 @@ class Trainer:
                 logs_writer.add_scalar("lr", current_lr[0], global_step)
             elif len(callback_args) == 3:
                 value, epoch, steps = callback_args
-                logs_writer.add_scalar("eval_metric", value, steps)
+                if isinstance(value, dict):
+                    metrics = value.get("metrics") or {}
+                    aggregate = value.get("aggregate")
+                    avg_ndcg = value.get("avg_ndcg", aggregate)
+                    entry = {
+                        "epoch": (epoch + 1) if epoch is not None else None,
+                        "step": steps,
+                        "split": value.get("split", "eval"),
+                        "metrics": metrics,
+                        "avg_ndcg": avg_ndcg,
+                    }
+                    if metrics:
+                        for name, metric_value in metrics.items():
+                            logs_writer.add_scalar(f"eval/{name}", metric_value, steps)
+                    if aggregate is not None:
+                        logs_writer.add_scalar("eval_metric", aggregate, steps)
+                    self._record_epoch_metrics(entry)
+                else:
+                    logs_writer.add_scalar("eval_metric", value, steps)
             else:
                 logging.debug("Unexpected callback args: %s", callback_args)
 
@@ -346,9 +384,30 @@ class Trainer:
         return metrics
 
     def _record_results(self, split: str, metrics: dict):
+        self.results.setdefault("final_metrics", {})[split] = metrics
+        self._write_results_file()
+
+    def _record_epoch_metrics(self, entry: dict):
+        self.results.setdefault("per_epoch_eval", []).append(entry)
+        self._update_best_eval()
+        self._write_results_file()
+
+    def _update_best_eval(self):
+        history = self.results.get("per_epoch_eval") or []
+        best_entry = None
+        best_value = float("-inf")
+        for item in history:
+            avg = item.get("avg_ndcg")
+            if avg is None:
+                continue
+            if avg > best_value:
+                best_value = avg
+                best_entry = item
+        self.results["best_eval"] = best_entry
+
+    def _write_results_file(self):
         if self.results_path is None:
             return
-        self.results[split] = metrics
         self.results_path.parent.mkdir(parents=True, exist_ok=True)
         with self.results_path.open("w", encoding="utf-8") as f:
             json.dump(self.results, f, ensure_ascii=False, indent=2)
