@@ -229,9 +229,46 @@ class QueryAwareGNN(RetrievalModel, nn.Module):
         query_mask, _ = self._create_masks_from_batch(batch)
         return query_mask
 
-    def _compute_loss(self, tool_logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    def _gather_threshold_logits(
+        self, batch: Batch, query_logits: torch.Tensor, tool_batch_index: torch.Tensor
+    ) -> torch.Tensor:
+        if query_logits is None or query_logits.numel() == 0:
+            return torch.zeros_like(tool_batch_index, dtype=torch.float32, device=tool_batch_index.device)
+        query_mask = self._get_query_mask(batch)
+        query_batch_index = batch.batch[query_mask]
+        if query_batch_index.numel() == 0:
+            return torch.zeros_like(tool_batch_index, dtype=torch.float32, device=tool_batch_index.device)
+        if tool_batch_index.numel() == 0:
+            return torch.zeros_like(tool_batch_index, dtype=torch.float32, device=tool_batch_index.device)
+
+        max_graph_id = int(
+            max(
+                query_batch_index.max().item(),
+                tool_batch_index.max().item(),
+            )
+        )
+        num_graphs = int(batch.num_graphs) if hasattr(batch, "num_graphs") else max_graph_id + 1
+        thresholds_per_graph = torch.zeros(
+            max(num_graphs, max_graph_id + 1),
+            dtype=query_logits.dtype,
+            device=query_logits.device,
+        )
+        thresholds_per_graph.index_copy_(0, query_batch_index, query_logits)
+        gathered = thresholds_per_graph[tool_batch_index.to(query_logits.device)]
+        return gathered
+
+    def _compute_loss(
+        self,
+        batch: Batch,
+        tool_logits: torch.Tensor,
+        query_logits: torch.Tensor,
+        tool_batch_index: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> torch.Tensor:
+        threshold_logits = self._gather_threshold_logits(batch, query_logits, tool_batch_index)
+        delta = tool_logits - threshold_logits
         pos_weight = self.pos_weight.to(tool_logits.device)
-        return F.binary_cross_entropy_with_logits(tool_logits, labels, pos_weight=pos_weight)
+        return F.binary_cross_entropy_with_logits(delta, labels, pos_weight=pos_weight)
 
     def fit(  # type: ignore[override]
         self,
@@ -265,7 +302,7 @@ class QueryAwareGNN(RetrievalModel, nn.Module):
                 batch = batch.to(self.device)
                 tool_logits, query_logits, tool_batch_index, tool_mask = self.forward(batch)
                 labels = batch.y[tool_mask].to(self.device)
-                loss = self._compute_loss(tool_logits, labels)
+                loss = self._compute_loss(batch, tool_logits, query_logits, tool_batch_index, labels)
 
                 optimizer.zero_grad()
                 loss.backward()

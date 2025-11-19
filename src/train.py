@@ -197,6 +197,11 @@ class APIEvaluator:
                     y_pred = tool_scores[graph_mask].numpy()
                     if y_true.size == 0:
                         continue
+                    if y_true.size <= 1:
+                        single_score = float(y_true[0]) if y_true.size == 1 else 0.0
+                        for k in self.top_k:
+                            ndcg_lists[k].append(single_score)
+                        continue
                     for k in self.top_k:
                         score = ndcg_score([y_true], [y_pred], k=k)
                         ndcg_lists[k].append(float(score))
